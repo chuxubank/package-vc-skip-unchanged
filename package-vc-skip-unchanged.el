@@ -4,7 +4,7 @@
 
 ;; Author: Misaka <chuxubank@qq.com>
 ;; Maintainer: Misaka <chuxubank@qq.com>
-;; Version: 0.2.0
+;; Version: 0.2.1
 ;; Package-Requires: ((emacs "30.1"))
 ;; Keywords: convenience, package
 ;; URL: https://github.com/chuxubank/package-vc-skip-unchanged
@@ -91,19 +91,26 @@ Each job includes the remote check and, when needed, the native upgrade."
   "Call ORIGINAL for PKG-DESC unless its upstream revision is unchanged."
   (if package-vc-skip-unchanged--revision-checked
       (funcall original pkg-desc)
-    (condition-case err
-        (if (not (eq (vc-responsible-backend (package-desc-dir pkg-desc))
-                     'Git))
-            (funcall original pkg-desc)
-          (package-vc-skip-unchanged--fetch-upstream pkg-desc)
-          (if (package-vc-skip-unchanged--same-revision-p pkg-desc)
-              (message "Package %s already up-to-date"
-                       (package-desc-name pkg-desc))
-            (funcall original pkg-desc)))
-      (error
-       (message "Could not check VC package %s: %s; falling back to upgrade"
-                (package-desc-name pkg-desc) (error-message-string err))
-       (funcall original pkg-desc)))))
+    (let ((upgrade
+           (condition-case err
+               (if (not (eq (vc-responsible-backend
+                             (package-desc-dir pkg-desc))
+                            'Git))
+                   t
+                 (package-vc-skip-unchanged--fetch-upstream pkg-desc)
+                 (if (package-vc-skip-unchanged--same-revision-p pkg-desc)
+                     (progn
+                       (message "Package %s already up-to-date"
+                                (package-desc-name pkg-desc))
+                       nil)
+                   t))
+             (error
+              (message
+               "Could not check VC package %s: %s; falling back to upgrade"
+               (package-desc-name pkg-desc) (error-message-string err))
+              t))))
+      (when upgrade
+        (funcall original pkg-desc)))))
 
 (defun package-vc-skip-unchanged--finish (state)
   "Finish the package upgrade operation represented by STATE."

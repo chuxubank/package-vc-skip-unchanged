@@ -81,6 +81,25 @@
             (should (= upgrade-count 0)))
         (package-vc-skip-unchanged-mode -1)))))
 
+(ert-deftest package-vc-skip-unchanged-calls-failing-native-upgrade-once ()
+  (let* ((desc (package-desc-create
+                :name 'cat-vc-test :version '(0) :summary "Test"
+                :kind 'vc :dir default-directory))
+         (upgrade-count 0))
+    (cl-letf (((symbol-function 'vc-responsible-backend)
+               (lambda (_dir) 'Hg))
+              ((symbol-function 'package-vc-upgrade)
+               (lambda (_pkg-desc)
+                 (cl-incf upgrade-count)
+                 (error "Native upgrade failed"))))
+      (unwind-protect
+          (progn
+            (package-vc-skip-unchanged-mode 1)
+            (should-error (package-vc-upgrade desc)
+                          :type 'error)
+            (should (= upgrade-count 1)))
+        (package-vc-skip-unchanged-mode -1)))))
+
 (ert-deftest package-vc-skip-unchanged-skips-matching-hashes-concurrently ()
   (let* ((root (make-temp-file "package-vc-skip-unchanged-test-" t))
          (git (expand-file-name "git" root))
