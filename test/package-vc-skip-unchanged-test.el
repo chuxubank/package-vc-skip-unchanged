@@ -8,22 +8,85 @@
   (should-not
    (advice-member-p #'package-vc-skip-unchanged-upgrade-all
                     'package-vc-upgrade-all))
+  (should-not
+   (advice-member-p #'package-vc-skip-unchanged-upgrade
+                    'package-vc-upgrade))
   (unwind-protect
       (progn
         (package-vc-skip-unchanged-mode 1)
         (should
          (advice-member-p #'package-vc-skip-unchanged-upgrade-all
-                          'package-vc-upgrade-all)))
+                          'package-vc-upgrade-all))
+        (should
+         (advice-member-p #'package-vc-skip-unchanged-upgrade
+                          'package-vc-upgrade)))
     (package-vc-skip-unchanged-mode -1))
   (should-not
    (advice-member-p #'package-vc-skip-unchanged-upgrade-all
-                    'package-vc-upgrade-all)))
+                    'package-vc-upgrade-all))
+  (should-not
+   (advice-member-p #'package-vc-skip-unchanged-upgrade
+                    'package-vc-upgrade)))
+
+(ert-deftest package-vc-skip-unchanged-skips-direct-upgrade ()
+  (let* ((desc (package-desc-create
+                :name 'cat-vc-test :version '(0) :summary "Test"
+                :kind 'vc :dir default-directory))
+         (fetch-count 0)
+         (same-revision t)
+         (upgrade-count 0))
+    (cl-letf (((symbol-function 'vc-responsible-backend)
+               (lambda (_dir) 'Git))
+              ((symbol-function 'package-vc-skip-unchanged--fetch-upstream)
+               (lambda (_pkg-desc) (cl-incf fetch-count)))
+              ((symbol-function 'package-vc-skip-unchanged--same-revision-p)
+               (lambda (_pkg-desc) same-revision))
+              ((symbol-function 'package-vc-upgrade)
+               (lambda (_pkg-desc) (cl-incf upgrade-count))))
+      (unwind-protect
+          (progn
+            (package-vc-skip-unchanged-mode 1)
+            (package-vc-upgrade desc)
+            (should (= fetch-count 1))
+            (should (= upgrade-count 0))
+            (setq same-revision nil)
+            (package-vc-upgrade desc)
+            (should (= fetch-count 2))
+            (should (= upgrade-count 1)))
+        (package-vc-skip-unchanged-mode -1)))))
+
+(ert-deftest package-vc-skip-unchanged-covers-package-upgrade-all ()
+  (let* ((desc (package-desc-create
+                :name 'cat-vc-test :version '(0) :summary "Test"
+                :kind 'vc :dir default-directory))
+         (package-alist `((cat-vc-test ,desc)))
+         (fetch-count 0)
+         (upgrade-count 0))
+    (cl-letf (((symbol-function 'package-refresh-contents) #'ignore)
+              ((symbol-function 'package--upgradeable-packages)
+               (lambda (&optional _include-builtins) '(cat-vc-test)))
+              ((symbol-function 'vc-responsible-backend)
+               (lambda (_dir) 'Git))
+              ((symbol-function 'package-vc-skip-unchanged--fetch-upstream)
+               (lambda (_pkg-desc) (cl-incf fetch-count)))
+              ((symbol-function 'package-vc-skip-unchanged--same-revision-p)
+               (lambda (_pkg-desc) t))
+              ((symbol-function 'package-vc-upgrade)
+               (lambda (_pkg-desc) (cl-incf upgrade-count))))
+      (unwind-protect
+          (progn
+            (package-vc-skip-unchanged-mode 1)
+            (package-upgrade-all nil)
+            (should (= fetch-count 1))
+            (should (= upgrade-count 0)))
+        (package-vc-skip-unchanged-mode -1)))))
 
 (ert-deftest package-vc-skip-unchanged-skips-matching-hashes-concurrently ()
   (let* ((root (make-temp-file "package-vc-skip-unchanged-test-" t))
          (git (expand-file-name "git" root))
          (package-alist nil)
          (package-vc-skip-unchanged-max-concurrency 2)
+         (direct-fetch-count 0)
          (upgrade-count 0))
     (unwind-protect
         (progn
@@ -52,7 +115,9 @@
                        (lambda (_dir) 'Git))
                       ((symbol-function 'package-vc-upgrade)
                        (lambda (_pkg-desc)
-                         (cl-incf upgrade-count))))
+                         (cl-incf upgrade-count)))
+                      ((symbol-function 'package-vc-skip-unchanged--fetch-upstream)
+                       (lambda (_pkg-desc) (cl-incf direct-fetch-count))))
               (package-vc-skip-unchanged-mode 1)
               (let ((noninteractive nil))
                 (package-vc-upgrade-all)
@@ -68,7 +133,8 @@
               (while (and (boundp 'package-vc-skip-unchanged--upgrade-state)
                           package-vc-skip-unchanged--upgrade-state)
                 (accept-process-output nil 0.05))
-              (should (= upgrade-count 1)))))
+              (should (= upgrade-count 1))
+              (should (= direct-fetch-count 0)))))
       (package-vc-skip-unchanged-mode -1)
       (setq package-vc-skip-unchanged--upgrade-state nil)
       (delete-directory root t))))

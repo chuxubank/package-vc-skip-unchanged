@@ -1,12 +1,14 @@
 #+title: package-vc-skip-unchanged
 
-Skip unnecessary work in =package-vc-upgrade-all= when a Git package's local
-=HEAD= already matches its upstream commit.
+Skip unnecessary work in =package-vc-upgrade=, =package-vc-upgrade-all=, and
+=package-upgrade-all= when a Git package's local =HEAD= already matches its
+upstream commit.
 
-The package fetches repositories with bounded concurrency, compares commit
-hashes, and calls the native =package-vc-upgrade= only for packages that have
-changed.  Non-Git packages and repositories that cannot be checked fall back
-to the native behavior.
+Bulk VC upgrades fetch repositories with bounded concurrency, compare commit
+hashes, and call the native =package-vc-upgrade= only for packages that have
+changed.  Direct upgrades perform the same check synchronously.  Non-Git
+packages and repositories that cannot be checked fall back to the native
+behavior.
 
 * Usage
 
@@ -31,8 +33,8 @@ The default concurrency is 6.  Customize it when needed:
 (setq package-vc-skip-unchanged-max-concurrency 4)
 #+end_src
 
-Loading the package alone does not modify =package-vc-upgrade-all=; the global
-minor mode explicitly enables and disables the override.
+Loading the package alone does not modify package functions; the global minor
+mode explicitly enables and disables the upgrade advice and bulk override.
 
 * Testing
 

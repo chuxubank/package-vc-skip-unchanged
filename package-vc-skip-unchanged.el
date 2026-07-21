@@ -4,7 +4,7 @@
 
 ;; Author: Misaka <chuxubank@qq.com>
 ;; Maintainer: Misaka <chuxubank@qq.com>
-;; Version: 0.1.0
+;; Version: 0.2.0
 ;; Package-Requires: ((emacs "30.1"))
 ;; Keywords: convenience, package
 ;; URL: https://github.com/chuxubank/package-vc-skip-unchanged
@@ -16,10 +16,11 @@
 
 ;;; Commentary:
 
-;; Avoid unnecessary work in `package-vc-upgrade-all'.  Git repositories
-;; are fetched with bounded concurrency, then packages whose local HEAD
-;; already matches their upstream commit are skipped.  Packages that changed,
-;; use another VC backend, or could not be checked are passed to the native
+;; Avoid unnecessary work in `package-vc-upgrade', `package-vc-upgrade-all',
+;; and callers such as `package-upgrade-all'.  Bulk Git upgrades fetch
+;; repositories with bounded concurrency, then skip packages whose local HEAD
+;; already matches their upstream commit.  Packages that changed, use another
+;; VC backend, or could not be checked are passed to the native
 ;; `package-vc-upgrade' implementation.
 ;;
 ;; Enable the behavior globally with `package-vc-skip-unchanged-mode'.
@@ -58,6 +59,9 @@ Each job includes the remote check and, when needed, the native upgrade."
 (defvar package-vc-skip-unchanged--upgrade-state nil
   "State of the current `package-vc-upgrade-all' operation.")
 
+(defvar package-vc-skip-unchanged--revision-checked nil
+  "Non-nil while calling the native upgrade after a revision check.")
+
 (defun package-vc-skip-unchanged--installed-packages ()
   "Return all installed VC package descriptors."
   (let (packages)
@@ -77,6 +81,29 @@ Each job includes the remote check and, when needed, the native upgrade."
   "Return non-nil when PKG-DESC is at its upstream revision."
   (string= (package-vc-skip-unchanged--git-output pkg-desc "rev-parse" "HEAD")
            (package-vc-skip-unchanged--git-output pkg-desc "rev-parse" "@{u}")))
+
+(defun package-vc-skip-unchanged--fetch-upstream (pkg-desc)
+  "Fetch the Git upstream for PKG-DESC synchronously."
+  (let ((default-directory (package-desc-dir pkg-desc)))
+    (vc-git-command t 0 nil "fetch" "--quiet")))
+
+(defun package-vc-skip-unchanged-upgrade (original pkg-desc)
+  "Call ORIGINAL for PKG-DESC unless its upstream revision is unchanged."
+  (if package-vc-skip-unchanged--revision-checked
+      (funcall original pkg-desc)
+    (condition-case err
+        (if (not (eq (vc-responsible-backend (package-desc-dir pkg-desc))
+                     'Git))
+            (funcall original pkg-desc)
+          (package-vc-skip-unchanged--fetch-upstream pkg-desc)
+          (if (package-vc-skip-unchanged--same-revision-p pkg-desc)
+              (message "Package %s already up-to-date"
+                       (package-desc-name pkg-desc))
+            (funcall original pkg-desc)))
+      (error
+       (message "Could not check VC package %s: %s; falling back to upgrade"
+                (package-desc-name pkg-desc) (error-message-string err))
+       (funcall original pkg-desc)))))
 
 (defun package-vc-skip-unchanged--finish (state)
   "Finish the package upgrade operation represented by STATE."
@@ -118,7 +145,8 @@ Each job includes the remote check and, when needed, the native upgrade."
   (cl-incf (package-vc-skip-unchanged--upgrade-state-upgrades state))
   (message "Updating VC package %s" (package-desc-name pkg-desc))
   (condition-case err
-      (let ((process (package-vc-upgrade pkg-desc)))
+      (let* ((package-vc-skip-unchanged--revision-checked t)
+             (process (package-vc-upgrade pkg-desc)))
         (if (and (processp process) (process-live-p process))
             (progn
               (process-put process 'package-vc-skip-unchanged--state state)
@@ -252,12 +280,16 @@ Git repositories are checked concurrently, with at most
 
 ;;;###autoload
 (define-minor-mode package-vc-skip-unchanged-mode
-  "Globally skip unchanged packages in `package-vc-upgrade-all'."
+  "Globally skip unchanged packages in VC package upgrades."
   :global t
   :group 'package-vc-skip-unchanged
   (advice-remove 'package-vc-upgrade-all
                  #'package-vc-skip-unchanged-upgrade-all)
+  (advice-remove 'package-vc-upgrade
+                 #'package-vc-skip-unchanged-upgrade)
   (when package-vc-skip-unchanged-mode
+    (advice-add 'package-vc-upgrade :around
+                #'package-vc-skip-unchanged-upgrade)
     (advice-add 'package-vc-upgrade-all :override
                 #'package-vc-skip-unchanged-upgrade-all)))
 
